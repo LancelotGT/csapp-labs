@@ -37,7 +37,7 @@ team_t team = {
 
 #define WSIZE 4 /* word size in bytes */
 #define DSIZE 8 /* double word size */
-#define CHUNKSIZE (1<<12) /* extend heao by this amount in bytes */
+#define CHUNKSIZE (1<<12) /* extend heap by this amount in bytes */
 
 #define MAX(x, y) ((x > y) ? (x) : (y))
 
@@ -58,7 +58,7 @@ team_t team = {
 
 /* given a block ptr bp, compute address of its previous and next blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET(((char *)(bp) - WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET(((char *)(bp) - DSIZE))
+#define PREV_BLKP(bp) ((char *)(bp) - GET(((char *)(bp) - DSIZE)))
 
 /* given a free block ptr bp, compute address of its previous and next blocks in free list */ 
 #define NEXT_FREE_BLKP(bp) ((char *)(bp) + GET((char *)(bp)))
@@ -80,8 +80,8 @@ static void *extend_heap(size_t words);
 static void place(void *bp, size_t asize);
 static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
+static void mm_checkheap(int verbose); 
 static void printblock(void *bp); 
-static void checkheap(int verbose);
 static void checkblock(void *bp);
 
 /* 
@@ -98,11 +98,16 @@ int mm_init(void)
     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1)); /* Epilogue header */
     heap_listp += (2 * WSIZE);
-    free_listp = heap_listp; /* point free_list to epilogue header */
     
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
+    if ((free_listp = extend_heap(CHUNKSIZE/WSIZE)) == NULL)
         return -1;
+    
+    /* initialize free list */
+    PUT_NEXT_BLKP(free_listp, (void*) 0);
+    PUT_PREV_BLKP(free_listp, (void*) 0); 
+    heap_listp = free_listp;
+    mm_checkheap(1); 
     return 0;
 }
 
@@ -154,6 +159,7 @@ void mm_free(void *bp)
     char* old_free = free_listp;
     free_listp = coalesce(bp);
     PUT_NEXT_BLKP(free_listp, old_free);
+    PUT_PREV_BLKP(free_listp, (void*) 0); 
     PUT_PREV_BLKP(old_free, free_listp);
 }
 
@@ -165,31 +171,6 @@ void *mm_realloc(void *ptr, size_t size)
     return ptr;
 }
 
-/*
- * mm_checkheap - Implemented simply in terms of mm_malloc and mm_free
- */ 
-void mm_checkheap(int verbose)
-{
-    char *bp = heap_listp;
-
-    if (verbose)
-        printf("Heap (%p):\n", heap_listp);
-
-    if ((GET_SIZE(HDRP(heap_listp)) != DSIZE) || !GET_ALLOC(HDRP(heap_listp)))
-        printf("Bad prologue header\n");
-    checkblock(heap_listp);
-
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        if (verbose) 
-            printblock(bp);
-        checkblock(bp);
-    }
-
-    if (verbose)
-        printblock(bp);
-    if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
-        printf("Bad epilogue header\n");
-}
 
 static void* extend_heap(size_t words) 
 {
@@ -213,7 +194,6 @@ static void* extend_heap(size_t words)
 static void* find_fit(size_t asize)
 {   /* First-fit search through the free list */ 
     char* bp;
-
     for (bp = free_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_FREE_BLKP(bp))
     {
         if (asize <= GET_SIZE(HDRP(bp)))
@@ -240,6 +220,7 @@ static void place(void* bp, size_t asize)
         char* old_free = free_listp;
         free_listp = bp;
         PUT_NEXT_BLKP(free_listp, old_free);
+        PUT_PREV_BLKP(free_listp, (void*) 0); 
         PUT_PREV_BLKP(old_free, free_listp); 
     }
     else 
@@ -283,6 +264,32 @@ static void* coalesce(void* bp)
     return bp;
 }
 
+/*
+ * mm_checkheap - Implemented simply in terms of mm_malloc and mm_free
+ */ 
+void mm_checkheap(int verbose)
+{
+    char *bp = heap_listp;
+
+    if (verbose)
+        printf("\nHeap (%p):\n", heap_listp);
+
+    if ((GET_SIZE(HDRP(heap_listp)) != DSIZE) || !GET_ALLOC(HDRP(heap_listp)))
+        printf("Bad prologue header\n");
+    checkblock(heap_listp);
+
+    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if (verbose) 
+            printblock(bp);
+        checkblock(bp);
+    }
+
+    if (verbose)
+        printblock(bp);
+    if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
+        printf("Bad epilogue header\n");
+}
+ 
 static void checkblock(void *bp) 
 {
     if ((size_t)bp % 8)
@@ -295,7 +302,7 @@ static void printblock(void *bp)
 {
     size_t hsize, halloc, fsize, falloc;
 
-    checkheap(0);
+    mm_checkheap(0);
     hsize = GET_SIZE(HDRP(bp));
     halloc = GET_ALLOC(HDRP(bp));  
     fsize = GET_SIZE(FTRP(bp));
