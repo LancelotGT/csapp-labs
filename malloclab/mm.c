@@ -61,14 +61,10 @@ team_t team = {
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
 /* given a free block ptr bp, compute address of its previous and next blocks in free list */ 
-//#define NEXT_FREE_BLKP(bp) ((char *)(bp) + GET_SIZE((char *)(bp)))
-//#define PREV_FREE_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) + WSIZE))) 
 #define NEXT_FREE_BLKP(bp) ((char*) GET(bp))
 #define PREV_FREE_BLKP(bp) ((char*) GET((char*) bp + WSIZE))
 
 /* give a free block ptr bp, change its next or prev neighbor in free list*/
-//#define PUT_NEXT_BLKP(bp, val) PUT((char*) (bp), val)
-//#define PUT_PREV_BLKP(bp, val) PUT((char*) (bp) + WSIZE, val) 
 #define PUT_NEXT_BLKP(bp, ptr) PUT((char*) (bp), ptr)
 #define PUT_PREV_BLKP(bp, ptr) PUT((char*) (bp) + WSIZE, ptr)  
 
@@ -111,7 +107,6 @@ int mm_init(void)
     /* initialize free list */
     PUT_NEXT_BLKP(free_listp, NULL);
     PUT_PREV_BLKP(free_listp, NULL); 
-    //mm_checkheap(1); 
     return 0;
 }
 
@@ -121,7 +116,6 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    //printf("malloc size: %lu\n", size);
     size_t asize;
     size_t extendsize;
     char *bp;
@@ -139,10 +133,7 @@ void *mm_malloc(size_t size)
     /* Search the free list for a fit */
     if ((bp = (char*) find_fit(asize)) != NULL) 
     {
-        //printf("Return from find fit: %lx\n", bp);
         place(bp, asize); /* insert the new block and split up if necessary */
-        //printf("\nCheck heap after malloc: \n"); 
-        //mm_checkheap(1); 
         return bp;
     }
 
@@ -151,8 +142,6 @@ void *mm_malloc(size_t size)
     if ((bp = (char*) extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
-    //printf("\nCheck heap after malloc: \n"); 
-    //mm_checkheap(1);
     return bp;
 }
 
@@ -162,8 +151,6 @@ void *mm_malloc(size_t size)
 void mm_free(void *bp)
 {   /* use LIFO to insert freed block */
     size_t size = GET_SIZE(HDRP(bp));
-    //printf("Free size: %lu\n", size);
-    //printf("Free address: %llx\n", bp); 
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
 
@@ -182,9 +169,6 @@ void mm_free(void *bp)
 
     if (old_free && NEXT_FREE_BLKP(old_free) == free_listp)
         PUT_NEXT_BLKP(old_free, NULL);
-
-    //printf("\nCheck heap after free: \n");
-    //mm_checkheap(1);
 }
 
 /*
@@ -426,8 +410,6 @@ void mm_checkheap(int verbose)
         printblock(bp);
     if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
         printf("Bad epilogue header\n");
-
-    
 }
  
 static void checkblock(void *bp) 
