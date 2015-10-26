@@ -1,3 +1,20 @@
+/* 
+ * csapp.c - Functions for the CS:APP3e book
+ *
+ * Updated 8/2014 droh: 
+ *   - New versions of open_clientfd and open_listenfd are reentrant and
+ *     protocol independent.
+ *
+ *   - Added protocol-independent inet_ntop and inet_pton functions. The
+ *     inet_ntoa and inet_aton functions are obsolete.
+ *
+ * Updated 7/2014 droh:
+ *   - Aded reentrant sio (signal-safe I/O) routines
+ * 
+ * Updated 4/2013 droh: 
+ *   - rio_readlineb: fixed edge case bug
+ *   - rio_readnb: removed redundant EINTR check
+ */
 /* $begin csapp.c */
 #include "csapp.h"
 
@@ -6,31 +23,38 @@
  **************************/
 /* $begin errorfuns */
 /* $begin unixerror */
-void unix_error(char *msg) /* unix-style error */
+void unix_error(char *msg) /* Unix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(errno));
     exit(0);
 }
 /* $end unixerror */
 
-void posix_error(int code, char *msg) /* posix-style error */
+void posix_error(int code, char *msg) /* Posix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(code));
     exit(0);
 }
 
-void dns_error(char *msg) /* dns-style error */
+void gai_error(int code, char *msg) /* Getaddrinfo-style error */
 {
-    fprintf(stderr, "%s: DNS error %d\n", msg, h_errno);
+    fprintf(stderr, "%s: %s\n", msg, gai_strerror(code));
     exit(0);
 }
 
-void app_error(char *msg) /* application error */
+void app_error(char *msg) /* Application error */
 {
     fprintf(stderr, "%s\n", msg);
     exit(0);
 }
 /* $end errorfuns */
+
+void dns_error(char *msg) /* Obsolete gethostbyname error */
+{
+    fprintf(stderr, "%s\n", msg);
+    exit(0);
+}
+
 
 /*********************************************
  * Wrappers for Unix process control functions
@@ -124,8 +148,8 @@ handler_t *Signal(int signum, handler_t *handler)
     struct sigaction action, old_action;
 
     action.sa_handler = handler;  
-    sigemptyset(&action.sa_mask); /* block sigs of type being handled */
-    action.sa_flags = SA_RESTART; /* restart syscalls if possible */
+    sigemptyset(&action.sa_mask); /* Block sigs of type being handled */
+    action.sa_flags = SA_RESTART; /* Restart syscalls if possible */
 
     if (sigaction(signum, &action, &old_action) < 0)
 	unix_error("Signal error");
@@ -176,6 +200,105 @@ int Sigismember(const sigset_t *set, int signum)
     return rc;
 }
 
+int Sigsuspend(const sigset_t *set)
+{
+    int rc = sigsuspend(set); /* always returns -1 */
+    if (errno != EINTR)
+        unix_error("Sigsuspend error");
+    return rc;
+}
+
+/*************************************************************
+ * The Sio (Signal-safe I/O) package - simple reentrant output
+ * functions that are safe for signal handlers.
+ *************************************************************/
+
+/* Private sio functions */
+
+/* $begin sioprivate */
+/* sio_reverse - Reverse a string (from K&R) */
+static void sio_reverse(char s[])
+{
+    int c, i, j;
+
+    for (i = 0, j = strlen(s)-1; i < j; i++, j--) {
+        c = s[i];
+        s[i] = s[j];
+        s[j] = c;
+    }
+}
+
+/* sio_ltoa - Convert long to base b string (from K&R) */
+static void sio_ltoa(long v, char s[], int b) 
+{
+    int c, i = 0;
+    
+    do {  
+        s[i++] = ((c = (v % b)) < 10)  ?  c + '0' : c - 10 + 'a';
+    } while ((v /= b) > 0);
+    s[i] = '\0';
+    sio_reverse(s);
+}
+
+/* sio_strlen - Return length of string (from K&R) */
+static size_t sio_strlen(char s[])
+{
+    int i = 0;
+
+    while (s[i] != '\0')
+        ++i;
+    return i;
+}
+/* $end sioprivate */
+
+/* Public Sio functions */
+/* $begin siopublic */
+
+ssize_t sio_puts(char s[]) /* Put string */
+{
+    return write(STDOUT_FILENO, s, sio_strlen(s)); //line:csapp:siostrlen
+}
+
+ssize_t sio_putl(long v) /* Put long */
+{
+    char s[128];
+    
+    sio_ltoa(v, s, 10); /* Based on K&R itoa() */  //line:csapp:sioltoa
+    return sio_puts(s);
+}
+
+void sio_error(char s[]) /* Put error message and exit */
+{
+    sio_puts(s);
+    _exit(1);                                      //line:csapp:sioexit
+}
+/* $end siopublic */
+
+/*******************************
+ * Wrappers for the SIO routines
+ ******************************/
+ssize_t Sio_putl(long v)
+{
+    ssize_t n;
+  
+    if ((n = sio_putl(v)) < 0)
+	sio_error("Sio_putl error");
+    return n;
+}
+
+ssize_t Sio_puts(char s[])
+{
+    ssize_t n;
+  
+    if ((n = sio_puts(s)) < 0)
+	sio_error("Sio_puts error");
+    return n;
+}
+
+void Sio_error(char s[])
+{
+    sio_error(s);
+}
 
 /********************************
  * Wrappers for Unix I/O routines
@@ -254,6 +377,39 @@ void Fstat(int fd, struct stat *buf)
 {
     if (fstat(fd, buf) < 0)
 	unix_error("Fstat error");
+}
+
+/*********************************
+ * Wrappers for directory function
+ *********************************/
+
+DIR *Opendir(const char *name) 
+{
+    DIR *dirp = opendir(name); 
+
+    if (!dirp)
+        unix_error("opendir error");
+    return dirp;
+}
+
+struct dirent *Readdir(DIR *dirp)
+{
+    struct dirent *dep;
+    
+    errno = 0;
+    dep = readdir(dirp);
+    if ((dep == NULL) && (errno != 0))
+        unix_error("readdir error");
+    return dep;
+}
+
+int Closedir(DIR *dirp) 
+{
+    int rc;
+
+    if ((rc = closedir(dirp)) < 0)
+        unix_error("closedir error");
+    return rc;
 }
 
 /***************************************
@@ -425,9 +581,58 @@ void Connect(int sockfd, struct sockaddr *serv_addr, int addrlen)
 	unix_error("Connect error");
 }
 
-/************************
- * DNS interface wrappers 
- ***********************/
+/*******************************
+ * Protocol-independent wrappers
+ *******************************/
+/* $begin getaddrinfo */
+void Getaddrinfo(const char *node, const char *service, 
+                 const struct addrinfo *hints, struct addrinfo **res)
+{
+    int rc;
+
+    if ((rc = getaddrinfo(node, service, hints, res)) != 0) 
+        gai_error(rc, "Getaddrinfo error");
+}
+/* $end getaddrinfo */
+
+void Getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, 
+                 size_t hostlen, char *serv, size_t servlen, int flags)
+{
+    int rc;
+
+    if ((rc = getnameinfo(sa, salen, host, hostlen, serv, 
+                          servlen, flags)) != 0) 
+        gai_error(rc, "Getnameinfo error");
+}
+
+void Freeaddrinfo(struct addrinfo *res)
+{
+    freeaddrinfo(res);
+}
+
+void Inet_ntop(int af, const void *src, char *dst, socklen_t size)
+{
+    if (!inet_ntop(af, src, dst, size))
+        unix_error("Inet_ntop error");
+}
+
+void Inet_pton(int af, const char *src, void *dst) 
+{
+    int rc;
+
+    rc = inet_pton(af, src, dst);
+    if (rc == 0)
+	app_error("inet_pton error: invalid dotted-decimal address");
+    else if (rc < 0)
+        unix_error("Inet_pton error");
+}
+
+/*******************************************
+ * DNS interface wrappers. 
+ *
+ * NOTE: These are obsolete because they are not thread safe. Use
+ * getaddrinfo and getnameinfo instead
+ ***********************************/
 
 /* $begin gethostbyname */
 struct hostent *Gethostbyname(const char *name) 
@@ -519,11 +724,12 @@ void V(sem_t *sem)
 	unix_error("V error");
 }
 
-/*********************************************************************
- * The Rio package - robust I/O functions
- **********************************************************************/
+/****************************************
+ * The Rio package - Robust I/O functions
+ ****************************************/
+
 /*
- * rio_readn - robustly read n bytes (unbuffered)
+ * rio_readn - Robustly read n bytes (unbuffered)
  */
 /* $begin rio_readn */
 ssize_t rio_readn(int fd, void *usrbuf, size_t n) 
@@ -534,7 +740,7 @@ ssize_t rio_readn(int fd, void *usrbuf, size_t n)
 
     while (nleft > 0) {
 	if ((nread = read(fd, bufp, nleft)) < 0) {
-	    if (errno == EINTR) /* interrupted by sig handler return */
+	    if (errno == EINTR) /* Interrupted by sig handler return */
 		nread = 0;      /* and call read() again */
 	    else
 		return -1;      /* errno set by read() */ 
@@ -549,7 +755,7 @@ ssize_t rio_readn(int fd, void *usrbuf, size_t n)
 /* $end rio_readn */
 
 /*
- * rio_writen - robustly write n bytes (unbuffered)
+ * rio_writen - Robustly write n bytes (unbuffered)
  */
 /* $begin rio_writen */
 ssize_t rio_writen(int fd, void *usrbuf, size_t n) 
@@ -560,10 +766,10 @@ ssize_t rio_writen(int fd, void *usrbuf, size_t n)
 
     while (nleft > 0) {
 	if ((nwritten = write(fd, bufp, nleft)) <= 0) {
-	    if (errno == EINTR)  /* interrupted by sig handler return */
+	    if (errno == EINTR)  /* Interrupted by sig handler return */
 		nwritten = 0;    /* and call write() again */
 	    else
-		return -1;       /* errorno set by write() */
+		return -1;       /* errno set by write() */
 	}
 	nleft -= nwritten;
 	bufp += nwritten;
@@ -586,17 +792,17 @@ static ssize_t rio_read(rio_t *rp, char *usrbuf, size_t n)
 {
     int cnt;
 
-    while (rp->rio_cnt <= 0) {  /* refill if buf is empty */
+    while (rp->rio_cnt <= 0) {  /* Refill if buf is empty */
 	rp->rio_cnt = read(rp->rio_fd, rp->rio_buf, 
 			   sizeof(rp->rio_buf));
 	if (rp->rio_cnt < 0) {
-	    if (errno != EINTR) /* interrupted by sig handler return */
+	    if (errno != EINTR) /* Interrupted by sig handler return */
 		return -1;
 	}
 	else if (rp->rio_cnt == 0)  /* EOF */
 	    return 0;
 	else 
-	    rp->rio_bufptr = rp->rio_buf; /* reset buffer ptr */
+	    rp->rio_bufptr = rp->rio_buf; /* Reset buffer ptr */
     }
 
     /* Copy min(n, rp->rio_cnt) bytes from internal buf to user buf */
@@ -633,12 +839,8 @@ ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n)
     char *bufp = usrbuf;
     
     while (nleft > 0) {
-	if ((nread = rio_read(rp, bufp, nleft)) < 0) {
-	    if (errno == EINTR) /* interrupted by sig handler return */
-		nread = 0;      /* call read() again */
-	    else
-		return -1;      /* errno set by read() */ 
-	} 
+	if ((nread = rio_read(rp, bufp, nleft)) < 0) 
+            return -1;          /* errno set by read() */ 
 	else if (nread == 0)
 	    break;              /* EOF */
 	nleft -= nread;
@@ -649,7 +851,7 @@ ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n)
 /* $end rio_readnb */
 
 /* 
- * rio_readlineb - robustly read a text line (buffered)
+ * rio_readlineb - Robustly read a text line (buffered)
  */
 /* $begin rio_readlineb */
 ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen) 
@@ -658,20 +860,22 @@ ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
     char c, *bufp = usrbuf;
 
     for (n = 1; n < maxlen; n++) { 
-	if ((rc = rio_read(rp, &c, 1)) == 1) {
+        if ((rc = rio_read(rp, &c, 1)) == 1) {
 	    *bufp++ = c;
-	    if (c == '\n')
-		break;
+	    if (c == '\n') {
+                n++;
+     		break;
+            }
 	} else if (rc == 0) {
 	    if (n == 1)
 		return 0; /* EOF, no data read */
 	    else
 		break;    /* EOF, some data was read */
 	} else
-	    return -1;	  /* error */
+	    return -1;	  /* Error */
     }
     *bufp = 0;
-    return n;
+    return n-1;
 }
 /* $end rio_readlineb */
 
@@ -720,89 +924,107 @@ ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
  * Client/server helper functions
  ********************************/
 /*
- * open_clientfd - open connection to server at <hostname, port> 
- *   and return a socket descriptor ready for reading and writing.
- *   Returns -1 and sets errno on Unix error. 
- *   Returns -2 and sets h_errno on DNS (gethostbyname) error.
+ * open_clientfd - Open connection to server at <hostname, port> and
+ *     return a socket descriptor ready for reading and writing. This
+ *     function is reentrant and protocol-independent.
+ * 
+ *     On error, returns -1 and sets errno.  
  */
 /* $begin open_clientfd */
-int open_clientfd(char *hostname, int port) 
-{
+int open_clientfd(char *hostname, char *port) {
     int clientfd;
-    struct hostent *hp;
-    struct sockaddr_in serveraddr;
+    struct addrinfo hints, *listp, *p;
 
-    if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-	return -1; /* check errno for cause of error */
+    /* Get a list of potential server addresses */
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_socktype = SOCK_STREAM;  /* Open a connection */
+    hints.ai_flags = AI_NUMERICSERV;  /* ... using a numeric port arg. */
+    hints.ai_flags |= AI_ADDRCONFIG;  /* Recommended for connections */
+    Getaddrinfo(hostname, port, &hints, &listp);
+  
+    /* Walk the list for one that we can successfully connect to */
+    for (p = listp; p; p = p->ai_next) {
+        /* Create a socket descriptor */
+        if ((clientfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0) 
+            continue; /* Socket failed, try the next */
 
-    /* Fill in the server's IP address and port */
-    if ((hp = gethostbyname(hostname)) == NULL)
-	return -2; /* check h_errno for cause of error */
-    bzero((char *) &serveraddr, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET;
-    bcopy((char *)hp->h_addr_list[0], 
-	  (char *)&serveraddr.sin_addr.s_addr, hp->h_length);
-    serveraddr.sin_port = htons(port);
+        /* Connect to the server */
+        if (connect(clientfd, p->ai_addr, p->ai_addrlen) != -1) 
+            break; /* Success */
+        Close(clientfd); /* Connect failed, try another */  //line:netp:openclientfd:closefd
+    } 
 
-    /* Establish a connection with the server */
-    if (connect(clientfd, (SA *) &serveraddr, sizeof(serveraddr)) < 0)
-	return -1;
-    return clientfd;
+    /* Clean up */
+    Freeaddrinfo(listp);
+    if (!p) /* All connects failed */
+        return -1;
+    else    /* The last connect succeeded */
+        return clientfd;
 }
 /* $end open_clientfd */
 
 /*  
- * open_listenfd - open and return a listening socket on port
- *     Returns -1 and sets errno on Unix error.
+ * open_listenfd - Open and return a listening socket on port. This
+ *     function is reentrant and protocol-independent.
+ *
+ *     On error, returns -1 and sets errno.
  */
 /* $begin open_listenfd */
-int open_listenfd(int port) 
+int open_listenfd(char *port) 
 {
+    struct addrinfo hints, *listp, *p;
     int listenfd, optval=1;
-    struct sockaddr_in serveraddr;
-  
-    /* Create a socket descriptor */
-    if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-	return -1;
- 
-    /* Eliminates "Address already in use" error from bind. */
-    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, 
-		   (const void *)&optval , sizeof(int)) < 0)
-	return -1;
 
-    /* Listenfd will be an endpoint for all requests to port
-       on any IP address for this host */
-    bzero((char *) &serveraddr, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET; 
-    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    serveraddr.sin_port = htons((unsigned short)port); 
-    if (bind(listenfd, (SA *)&serveraddr, sizeof(serveraddr)) < 0)
-	return -1;
+    /* Get a list of potential server addresses */
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_socktype = SOCK_STREAM;             /* Accept connections */
+    hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG; /* ... on any IP address */
+    hints.ai_flags |= AI_NUMERICSERV;            /* ... using port number */
+    Getaddrinfo(NULL, port, &hints, &listp);
+
+    /* Walk the list for one that we can bind to */
+    for (p = listp; p; p = p->ai_next) {
+        /* Create a socket descriptor */
+        if ((listenfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0) 
+            continue;  /* Socket failed, try the next */
+
+        /* Eliminates "Address already in use" error from bind */
+        Setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR,    //line:netp:csapp:setsockopt
+                   (const void *)&optval , sizeof(int));
+
+        /* Bind the descriptor to the address */
+        if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0)
+            break; /* Success */
+        Close(listenfd); /* Bind failed, try the next */
+    }
+
+    /* Clean up */
+    Freeaddrinfo(listp);
+    if (!p) /* No address worked */
+        return -1;
 
     /* Make it a listening socket ready to accept connection requests */
-    if (listen(listenfd, LISTENQ) < 0)
+    if (listen(listenfd, LISTENQ) < 0) {
+        Close(listenfd);
 	return -1;
+    }
     return listenfd;
 }
 /* $end open_listenfd */
 
-/******************************************
- * Wrappers for the client/server helper routines 
- ******************************************/
-int Open_clientfd(char *hostname, int port) 
+/****************************************************
+ * Wrappers for reentrant protocol-independent helpers
+ ****************************************************/
+int Open_clientfd(char *hostname, char *port) 
 {
     int rc;
 
-    if ((rc = open_clientfd(hostname, port)) < 0) {
-	if (rc == -1)
-	    unix_error("Open_clientfd Unix error");
-	else        
-	    dns_error("Open_clientfd DNS error");
-    }
+    if ((rc = open_clientfd(hostname, port)) < 0) 
+	unix_error("Open_clientfd error");
     return rc;
 }
 
-int Open_listenfd(int port) 
+int Open_listenfd(char *port) 
 {
     int rc;
 
@@ -810,6 +1032,7 @@ int Open_listenfd(int port)
 	unix_error("Open_listenfd error");
     return rc;
 }
+
 /* $end csapp.c */
 
 
