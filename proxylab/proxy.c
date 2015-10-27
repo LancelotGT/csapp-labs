@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "csapp.h"
+#include <pthread.h>
 
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
@@ -9,8 +10,10 @@ static const char *accept_type = "Accept: text/html,application/xhtml+xml,applic
 static const char *accept_encoding = "Accept-Encoding: gzip, deflate\r\n";
 static const char *connection = "Connection: close\r\n";
 static const char *proxy_connection = "Proxy-Connection: close\r\n";
+static pthread_mutex_t print_lock; 
 
 void handle_request(int clientfd);
+void* handle_wrapper(void* arg);
 void clienterror(int fd, char *cause, char *errnum, 
 		 char *shortmsg, char *longmsg);
 int parse_url(char* url, char* hostname, char* uri);
@@ -19,10 +22,11 @@ void read_requesthdrs(rio_t *rp);
 
 int main(int argc, char **argv) 
 {
-    int listenfd, connfd;
+    long listenfd, connfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
+    pthread_mutex_init(&print_lock, NULL);
 
     /* Check command line args */
     if (argc != 2) {
@@ -31,31 +35,64 @@ int main(int argc, char **argv)
     }
 
     listenfd = Open_listenfd(argv[1]);
+    
     while (1) {
         clientlen = sizeof(clientaddr);
         if ((connfd = accept(listenfd, (SA *)&clientaddr, &clientlen)) == -1)
         {   /* block until get a request */
+            pthread_mutex_lock(&print_lock);
             printf("Accepting connection error\n");
+            pthread_mutex_unlock(&print_lock); 
             continue;
         }
         int rc;
         if ((rc = getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
                 port, MAXLINE, 0)) != 0)
         {
+            pthread_mutex_lock(&print_lock); 
             printf("Getnameinfo error\n");
+            pthread_mutex_unlock(&print_lock); 
             continue;
         }
             
+        pthread_mutex_lock(&print_lock); 
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        handle_request(connfd);
-        if ((rc = close(connfd)) < 0)
-        {
-            printf("Close error\n");
-            continue;
-        }
-        printf("Connection closed.\n");
+        pthread_mutex_unlock(&print_lock); 
+
+        /* spawn a new thread to handle that request */
+        pthread_t t;
+        pthread_create(&t, NULL, handle_wrapper, (void*) connfd);
+        pthread_detach(t);
     }
 }
+
+/*
+ * handle_wrapper -  a wrapper around handle_request for 
+ * multithreaded request handler
+ */
+
+void* handle_wrapper(void *arg)
+{
+    pthread_mutex_lock(&print_lock);
+    printf("New thread: %lu started.\n", pthread_self());
+    pthread_mutex_unlock(&print_lock);  
+
+    long clientfd = (long) arg;
+    handle_request(clientfd);
+    int rc;
+    if ((rc = close(clientfd)) < 0)
+    {
+        pthread_mutex_lock(&print_lock);
+        printf("Close error\n");
+        pthread_mutex_unlock(&print_lock); 
+        return NULL;
+    }
+    pthread_mutex_lock(&print_lock); 
+    printf("Connection from client closed.\n"); 
+    pthread_mutex_unlock(&print_lock); 
+    return NULL;
+}
+
 
 /*
  * handle_request - handle one HTTP request from client and 
@@ -83,14 +120,12 @@ void handle_request(int clientfd)
     parse_url(url, hostname, uri);
 
     /* connect to host server by hostname */
-    printf("hostname: %s\n", hostname);
-    printf("url: %s\n", url); 
-    printf("uri: %s\n", uri); 
-
     int serverfd;
     if ((serverfd = open_clientfd(hostname, port)) < 0)
     {
+        pthread_mutex_lock(&print_lock);  
         printf("Open_clientfd error\n");
+        pthread_mutex_unlock(&print_lock);  
         return;
     }
 
@@ -122,10 +157,19 @@ void handle_request(int clientfd)
     read_requesthdrs(&rio);
     size_t n;
     while ((n = rio_readlineb(&rio, buf, MAXLINE)) != 0) 
-    {
-        printf("Proxy received %lu bytes\n", n);
         rio_writen(clientfd, buf, strlen(buf));
+
+    /* close connection to server */
+    int rc;
+    if ((rc = close(serverfd)) < 0)
+    {
+        pthread_mutex_lock(&print_lock);
+        printf("Close error\n");
+        pthread_mutex_unlock(&print_lock); 
     }
+    pthread_mutex_lock(&print_lock); 
+    printf("Connection to server closed.\n");  
+    pthread_mutex_unlock(&print_lock);
 }
 
 /*
@@ -162,7 +206,6 @@ int parse_url(char* url, char* hostname, char* uri)
     char *ptr;
     if (!(ptr = strstr(url, "http://")))
         return -1;
-    printf("ptr: %s\n", ptr + 7);
     /* copy hostname from url */
     int i;
     for (i = 7; ptr[i] != '/' && ptr[i] != '\0'; i++)
