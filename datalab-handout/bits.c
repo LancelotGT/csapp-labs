@@ -176,7 +176,18 @@ int logicalShift(int x, int n) {
  *   Rating: 4
  */
 int bitCount(int x) {
-    return 2;
+    /* source: stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer/ */
+    x = (((x >> 1) & 0b01010101010101010101010101010101)
+            + (x & 0b01010101010101010101010101010101));
+    x = (((x >> 2) & 0b00110011001100110011001100110011)
+            + (x & 0b00110011001100110011001100110011)); 
+    x = (((x >> 4) & 0b00001111000011110000111100001111)
+            + (x & 0b00001111000011110000111100001111)); 
+    x = (((x >> 8) & 0b00000000111111110000000011111111)
+            + (x & 0b00000000111111110000000011111111)); 
+    x = (((x >> 16)& 0b00000000000000001111111111111111)
+            + (x & 0b00000000000000001111111111111111)); 
+    return x;
 }
 /* 
  * bang - Compute !x without using !
@@ -259,6 +270,8 @@ int isPositive(int x) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
+    /* flip the MSB to fix the case when compare positive and negative number */
+    /* all other cases works fine */
     x ^= 0x80000000;
     y ^= 0x80000000;
     unsigned int lt = ~x & y;
@@ -279,7 +292,25 @@ int isLessOrEqual(int x, int y) {
  *   Rating: 4
  */
 int ilog2(int x) {
-    return 2;
+    /* accumulate most signficant 1 to the end */ 
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+
+    /* use bit count to count 1's, result is x - 1 */
+    x = (((x >> 1) & 0b01010101010101010101010101010101)
+            + (x & 0b01010101010101010101010101010101));
+    x = (((x >> 2) & 0b00110011001100110011001100110011)
+            + (x & 0b00110011001100110011001100110011)); 
+    x = (((x >> 4) & 0b00001111000011110000111100001111)
+            + (x & 0b00001111000011110000111100001111)); 
+    x = (((x >> 8) & 0b00000000111111110000000011111111)
+            + (x & 0b00000000111111110000000011111111)); 
+    x = (((x >> 16)& 0b00000000000000001111111111111111)
+            + (x & 0b00000000000000001111111111111111));  
+    return x - 1;
 }
 /* 
  * float_neg - Return bit-level equivalent of expression -f for
@@ -293,7 +324,10 @@ int ilog2(int x) {
  *   Rating: 2
  */
 unsigned float_neg(unsigned uf) {
- return 2;
+    if (!((uf & 0x7FFFFFFF) >> 23 ^ 0x000000FF) && uf << 9) /* not a number */
+        return uf;
+    uf ^= 0x80000000;
+    return uf;
 }
 /* 
  * float_i2f - Return bit-level equivalent of expression (float) x
